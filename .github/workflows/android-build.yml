@@ -1,0 +1,147 @@
+name: Build Android APKs (Manual Trigger)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number for the APKs'
+        required: true
+        default: '1.0.0'
+      buildType:
+        description: 'Build type (release/debug)'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+jobs:
+  build-android:
+    name: Build Android ${{ github.event.inputs.buildType }} APKs
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - { target: aarch64-linux-android, abi: arm64-v8a }
+          - { target: armv7-linux-androideabi, abi: armeabi-v7a }
+          - { target: x86_64-linux-android, abi: x86_64 }
+          - { target: i686-linux-android, abi: x86 }
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.24.3'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.arch.target }}
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version 2.12.7 --locked
+
+      - name: Build Rust library
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.0.11718014
+        run: |
+          rustup target add ${{ matrix.arch.target }}
+          cargo ndk -t ${{ matrix.arch.abi }} build --${{ github.event.inputs.buildType }}
+
+      - name: Prepare JNI libraries
+        run: |
+          mkdir -p ./flutter/android/app/src/main/jniLibs/${{ matrix.arch.abi }}
+          cp ./target/${{ matrix.arch.target }}/${{ github.event.inputs.buildType }}/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/${{ matrix.arch.abi }}/librustdesk.so
+          cp $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${{ matrix.arch.target }}/libc++_shared.so ./flutter/android/app/src/main/jniLibs/${{ matrix.arch.abi }}/
+
+      - name: Build Flutter APK
+        run: |
+          cd flutter
+          flutter pub get
+          flutter build apk --${{ github.event.inputs.buildType }} --target-platform android-${{ matrix.arch.abi }} --split-per-abi
+
+      - name: Rename unsigned APK
+        run: |
+          mkdir -p ./unsigned-apks
+          mv ./flutter/build/app/outputs/flutter-apk/app-${{ matrix.arch.abi }}-${{ github.event.inputs.buildType }}.apk ./unsigned-apks/rustdesk-${{ github.event.inputs.version }}-${{ matrix.arch.abi }}-unsigned.apk
+
+      - name: Sign APK (if signing key exists)
+        if: ${{ secrets.ANDROID_SIGNING_KEY != '' }}
+        uses: r0adkll/sign-android-release@v1
+        id: sign_apk
+        with:
+          releaseDirectory: ./flutter/build/app/outputs/flutter-apk
+          signingKeyBase64: ${{ secrets.ANDROID_SIGNING_KEY }}
+          alias: ${{ secrets.ANDROID_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Rename signed APK
+        if: ${{ secrets.ANDROID_SIGNING_KEY != '' }}
+        run: |
+          mkdir -p ./signed-apks
+          mv ${{ steps.sign_apk.outputs.signedReleaseFile }} ./signed-apks/rustdesk-${{ github.event.inputs.version }}-${{ matrix.arch.abi }}-signed.apk
+
+      - name: Upload unsigned APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-apks-${{ matrix.arch.abi }}
+          path: ./unsigned-apks/*.apk
+
+      - name: Upload signed APKs
+        if: ${{ secrets.ANDROID_SIGNING_KEY != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-apks-${{ matrix.arch.abi }}
+          path: ./signed-apks/*.apk
+
+  publish-artifacts:
+    name: Publish all artifacts
+    needs: build-android
+    runs-on: ubuntu-24.04
+    if: ${{ github.event.inputs.buildType == 'release' }}
+    
+    steps:
+      - name: Download all unsigned artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: unsigned-apks-*
+          path: all-unsigned-apks
+          merge-multiple: true
+
+      - name: Download all signed artifacts
+        if: ${{ secrets.ANDROID_SIGNING_KEY != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: signed-apks-*
+          path: all-signed-apks
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: android-build-${{ github.event.inputs.version }}-${{ github.sha }}
+          name: Android Build ${{ github.event.inputs.version }}
+          draft: false
+          prerelease: true
+          files: |
+            all-unsigned-apks/*.apk
+            all-signed-apks/*.apk
