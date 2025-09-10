@@ -14,6 +14,17 @@ on:
       - 'android/**'
       - 'lib/**'
       - 'Cargo.toml'
+  workflow_dispatch:  # 新增：允许手动触发
+    # 可选：添加手动触发时的参数（如指定分支、构建类型等）
+    inputs:
+      build_type:
+        description: '构建类型 (release/debug)'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
 
 jobs:
   build:
@@ -37,16 +48,25 @@ jobs:
         run: cargo install cargo-ndk
 
       - name: Build Rust libraries
+        # 根据手动触发的参数决定构建类型（默认 release）
         run: |
           cd lib/rustdesk
-          cargo ndk -t armv7-linux-androideabi -t aarch64-linux-android -t i686-linux-android -t x86_64-linux-android -o ../android/app/src/main/jniLibs build --release
+          if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
+            cargo ndk -t armv7-linux-androideabi -t aarch64-linux-android -t i686-linux-android -t x86_64-linux-android -o ../android/app/src/main/jniLibs build --release
+          else
+            cargo ndk -t armv7-linux-androideabi -t aarch64-linux-android -t i686-linux-android -t x86_64-linux-android -o ../android/app/src/main/jniLibs build
+          fi
 
       - name: Build APK
         run: |
           cd android
-          ./gradlew assembleRelease
+          if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
+            ./gradlew assembleRelease
+          else
+            ./gradlew assembleDebug
+          fi
         env:
-          # 若配置了签名，添加以下环境变量
+          # 签名信息（若配置）
           ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -55,5 +75,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v3
         with:
-          name: rustdesk-android-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          name: rustdesk-android-apk-${{ github.event.inputs.build_type }}
+          path: android/app/build/outputs/apk/${{ github.event.inputs.build_type }}/*.apk
