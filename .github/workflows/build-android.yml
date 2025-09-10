@@ -1,0 +1,59 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'android/**'
+      - 'lib/**'
+      - 'Cargo.toml'
+      - '.github/workflows/build-android.yml'
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'android/**'
+      - 'lib/**'
+      - 'Cargo.toml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-linux-androideabi, aarch64-linux-android, i686-linux-android, x86_64-linux-android
+
+      - name: Install Android NDK and SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Rust libraries
+        run: |
+          cd lib/rustdesk
+          cargo ndk -t armv7-linux-androideabi -t aarch64-linux-android -t i686-linux-android -t x86_64-linux-android -o ../android/app/src/main/jniLibs build --release
+
+      - name: Build APK
+        run: |
+          cd android
+          ./gradlew assembleRelease
+        env:
+          # 若配置了签名，添加以下环境变量
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: rustdesk-android-apk
+          path: android/app/build/outputs/apk/release/*.apk
