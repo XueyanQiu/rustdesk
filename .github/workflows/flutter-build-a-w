@@ -1,0 +1,167 @@
+name: Build Flutter Only Android Windows
+
+on:
+  workflow_call:
+    inputs:
+      upload-artifact:
+        type: boolean
+        default: true
+      upload-tag:
+        type: string
+        default: 'nightly'
+
+jobs:
+  # Android 平台构建任务
+  build-rustdesk-android:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.75.0
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+        working-directory: ./flutter
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;27.2.12215406"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12215406" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Build Android dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config
+          ./build_android_deps.sh
+        working-directory: ./flutter
+
+      - name: Build Rust core (aarch64)
+        run: |
+          cargo build --release --target aarch64-linux-android --features flutter,hwcodec
+          mkdir -p ../flutter/android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/release/librustdesk.so ../flutter/android/app/src/main/jniLibs/arm64-v8a/
+        working-directory: ./libs/rustdesk
+
+      - name: Build Rust core (armv7)
+        run: |
+          cargo build --release --target armv7-linux-androideabi --features flutter,hwcodec
+          mkdir -p ../flutter/android/app/src/main/jniLibs/armeabi-v7a
+          cp target/armv7-linux-androideabi/release/librustdesk.so ../flutter/android/app/src/main/jniLibs/armeabi-v7a/
+        working-directory: ./libs/rustdesk
+
+      - name: Build Rust core (x86_64)
+        run: |
+          cargo build --release --target x86_64-linux-android --features flutter,hwcodec
+          mkdir -p ../flutter/android/app/src/main/jniLibs/x86_64
+          cp target/x86_64-linux-android/release/librustdesk.so ../flutter/android/app/src/main/jniLibs/x86_64/
+        working-directory: ./libs/rustdesk
+
+      - name: Build Flutter APK
+        run: flutter build apk --release --split-per-abi
+        working-directory: ./flutter
+
+      - name: Upload Android artifacts
+        if: inputs.upload-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-android
+          path: flutter/build/app/outputs/apk/release/*.apk
+
+  # Windows 平台构建任务
+  build-for-windows-flutter:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.75.0
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: 'stable'
+
+      - name: Enable Windows desktop support
+        run: flutter config --enable-windows-desktop
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+        working-directory: ./flutter
+
+      - name: Install LLVM
+        uses: KyleMayes/install-llvm-action@v20
+        with:
+          version: '15.0.6'
+
+      - name: Build Rust core
+        run: |
+          cargo build --release --features flutter
+          Copy-Item target/release/rustdesk.dll ../flutter/windows/rustdesk.dll
+        working-directory: ./libs/rustdesk
+
+      - name: Build Flutter Windows
+        run: flutter build windows --release
+        working-directory: ./flutter
+
+      - name: Prepare Windows artifacts
+        run: |
+          mkdir -p artifacts
+          Copy-Item flutter/build/windows/x64/runner/Release/* artifacts/
+          # 下载并整合额外工具（如虚拟显示器驱动）
+          Invoke-WebRequest -Uri "https://github.com/rustdesk/rustdesk/releases/download/nightly/usbmmidd_v2.zip" -OutFile "artifacts/usbmmidd_v2.zip"
+        shell: pwsh
+
+      - name: Build MSI installer
+        run: |
+          msbuild msi.sln /p:Configuration=Release /p:Platform=x64
+          Copy-Item msi/Release/rustdesk.msi artifacts/
+        working-directory: ./windows
+
+      - name: Upload Windows artifacts
+        if: inputs.upload-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-windows
+          path: |
+            artifacts/*.exe
+            artifacts/*.msi
+            artifacts/*.zip
+
+  # 发布构建产物（仅保留Android和Windows相关）
+  release:
+    needs: [build-rustdesk-android, build-for-windows-flutter]
+    if: inputs.upload-artifact
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.upload-tag }}
+          files: |
+            rustdesk-android/*.apk
+            rustdesk-windows/*.exe
+            rustdesk-windows/*.msi
+            rustdesk-windows/*.zip
