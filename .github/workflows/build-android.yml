@@ -1,21 +1,8 @@
 name: Build Android APK
 
 on:
-  push:
-    branches: [ master ]
-    paths:
-      - 'android/**'
-      - 'lib/**'
-      - 'Cargo.toml'
-      - '.github/workflows/build-android.yml'
-  pull_request:
-    branches: [ master ]
-    paths:
-      - 'android/**'
-      - 'lib/**'
-      - 'Cargo.toml'
-  workflow_dispatch:  # 新增：允许手动触发
-    # 可选：添加手动触发时的参数（如指定分支、构建类型等）
+
+  workflow_dispatch:
     inputs:
       build_type:
         description: '构建类型 (release/debug)'
@@ -35,6 +22,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
+          fetch-depth: 0 
+
+      - name: Initialize submodules
+        run: |
+          git submodule sync
+          git submodule update --init --recursive
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -48,9 +41,8 @@ jobs:
         run: cargo install cargo-ndk
 
       - name: Build Rust libraries
-        # 根据手动触发的参数决定构建类型（默认 release）
         run: |
-          cd lib/rustdesk
+          cd rustdesk
           if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
             cargo ndk -t armv7-linux-androideabi -t aarch64-linux-android -t i686-linux-android -t x86_64-linux-android -o ../android/app/src/main/jniLibs build --release
           else
@@ -66,7 +58,6 @@ jobs:
             ./gradlew assembleDebug
           fi
         env:
-          # 签名信息（若配置）
           ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -77,3 +68,4 @@ jobs:
         with:
           name: rustdesk-android-apk-${{ github.event.inputs.build_type }}
           path: android/app/build/outputs/apk/${{ github.event.inputs.build_type }}/*.apk
+          retention-days: 30
