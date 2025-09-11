@@ -177,11 +177,24 @@ void runMobileApp() async {
   if (isAndroid) androidChannelInit();
   if (isAndroid) platformFFI.syncAndroidServiceAppDirConfigPath();
   draggablePositions.load();
+  // 设置默认配置
+  await setDefaultConfigs();
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
   await initUniLinks();
 }
+
+// 设置默认配置
+Future<void> setDefaultConfigs() async {
+  // 设置默认ID服务器
+  await bind.mainSetOption(key: 'custom-rendezvous-server', value: '49.1.1.1');
+  // 设置默认中继服务器
+  await bind.mainSetOption(key: 'relay-server', value: '49.1.1.1');
+  // 设置默认密钥
+  await bind.mainSetOption(key: 'key', value: 'xxxxxxxx=');
+}
+
 
 void runMultiWindow(
   Map<String, dynamic> argument,
