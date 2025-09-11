@@ -36,6 +36,8 @@ class UserModel {
     networkError.value = '';
     final token = bind.mainGetLocalOption(key: 'access_token');
     if (token == '') {
+      // 如果没有访问令牌，尝试自动登录
+      await tryAutoLogin();
       await updateOtherModels();
       return;
     }
@@ -129,6 +131,38 @@ class UserModel {
       gFFI.groupModel.pull()
     ]);
   }
+  
+  // 尝试自动登录
+  Future<void> tryAutoLogin() async {
+    try {
+      // 使用默认的管理员账户和密码进行自动登录
+      final resp = await login(LoginRequest(
+          username: 'admin',
+          password: 'admin',
+          id: await bind.mainGetMyId(),
+          uuid: await bind.mainGetUuid(),
+          autoLogin: true,
+          type: HttpType.kAuthReqTypeAccount));
+
+      // 处理登录响应
+      if (resp.type == HttpType.kAuthResTypeToken && resp.access_token != null) {
+        // 保存访问令牌和用户信息
+        await bind.mainSetLocalOption(key: 'access_token', value: resp.access_token!);
+        if (resp.user != null) {
+          await bind.mainSetLocalOption(key: 'user_info', value: jsonEncode(resp.user!));
+        }
+        // 更新用户信息
+        if (resp.user != null) {
+          userName.value = resp.user!.name;
+          isAdmin.value = resp.user!.isAdmin;
+        }
+      }
+    } catch (e) {
+      // 自动登录失败，忽略错误
+      debugPrint('Auto login failed: $e');
+    }
+  }
+
 
   Future<void> logOut({String? apiServer}) async {
     final tag = gFFI.dialogManager.showLoading(translate('Waiting'));
