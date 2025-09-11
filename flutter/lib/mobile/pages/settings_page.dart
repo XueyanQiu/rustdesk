@@ -69,7 +69,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   final _hasIgnoreBattery =
       false; //androidVersion >= 26; // remove because not work on every device
   var _ignoreBatteryOpt = false;
-  var _enableStartOnBoot = false;
+  var _enableStartOnBoot = true;
   var _checkUpdateOnStartup = false;
   var _floatingWindowDisabled = false;
   var _keepScreenOn = KeepScreenOn.duringControlled; // relay on floating window
